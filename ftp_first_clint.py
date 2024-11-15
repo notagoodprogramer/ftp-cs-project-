@@ -1,4 +1,5 @@
 from ftplib import FTP
+import os
 
 def connect_to_ftp():
     ftp = FTP()
@@ -10,44 +11,52 @@ def connect_to_ftp():
 def list_files(ftp):
     ftp.retrlines('LIST')
 
-def upload_file(ftp, local_file, remote_file):
-    with open(local_file, 'rb') as file:
-        ftp.storbinary(f'STOR {remote_file}', file)
+def upload_file(ftp, file_name):
+    if os.path.exists:
+        with open(file_name, 'rb') as file:
+            ftp.storbinary(f'STOR {file_name}', file)
+        print(f"Uploaded: {file_name}")
+    else:
+        print(f"File: {file_name} does not exist")
 
-def download_file(ftp, remote_file, local_file):
-    with open(local_file, 'wb') as file:
-        ftp.retrbinary(f'RETR {remote_file}', file.write)
+def download_file(ftp, file_name):
+    if file_name in ftp.nlst():
+        with open(file_name, 'wb') as file:
+            ftp.retrbinary(f'RETR {file_name}', file.write)
+            print(f"Downloaded: {file_name}")
+    else:
+        print(f"File: {file_name} does not exist")
 
-def delete_file(ftp, remote_file):
-    ftp.delete(remote_file)
+def delete_file(ftp, file_name):
+    if file_name in ftp.nlst():
+        ftp.delete(file_name)
+        print(f"Deleted: {file_name}")
+    else: 
+        print(f"File: {file_name} does not exist")
 
+        
 def main():
     ftp = connect_to_ftp()
-
-    print("Listing files:")
-    list_files(ftp)
-
-    local_file_to_upload = 'upload_test.txt'
-    remote_file_name = 'uploaded_test.txt'
-    print(f"\nUploading {local_file_to_upload} as {remote_file_name}")
-    upload_file(ftp, local_file_to_upload, remote_file_name)
-
-    print("\nListing files after upload:")
-    list_files(ftp)
-
-    local_file_to_download = 'downloaded_test.txt'
-    print(f"\nDownloading {remote_file_name} as {local_file_to_download}")
-    download_file(ftp, remote_file_name, local_file_to_download)
-
-    print("\nListing files after download:")
-    list_files(ftp)
-
-    print(f"\nDeleting {remote_file_name}")
-    delete_file(ftp, remote_file_name)
-
-    print("\nListing files after deletion:")
-    list_files(ftp)
-
+    
+    while True:
+        action = input("Enter action name (list, upload, download, delete, quit): ").strip().lower()
+        
+        if action == "list":
+            list_files(ftp)
+        elif action == "upload":
+            file_name = input("Enter the name of the file to upload: ").strip()
+            upload_file(ftp,file_name)
+        elif action == "download":
+            file_name = input("Enter the name of the file to download: ").strip()
+            download_file(ftp,file_name)
+        elif action == "delete":
+            file_name = input("Enter the name of the file to delete: ").strip()
+            delete_file(ftp,file_name)
+        elif action == "quit":
+            print("quiting")
+            break
+            
+            
     ftp.quit()
 
 if __name__ == "__main__":
