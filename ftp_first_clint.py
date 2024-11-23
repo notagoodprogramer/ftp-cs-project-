@@ -1,9 +1,10 @@
 from ftplib import FTP
 import os
-
+IP = "192.168.133.71"
+PORT = 2121
 def connect_to_ftp():
     ftp = FTP()
-    ftp.connect('127.0.0.1', 2121)  # Connect to the local FTP server
+    ftp.connect(IP, PORT)  # Connect to the local FTP server
     ftp.login('user', '12345')  # Log in with the username and password
     print(ftp.getwelcome())
     return ftp

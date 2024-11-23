@@ -1,25 +1,26 @@
 from pyftpdlib.authorizers import DummyAuthorizer
 from pyftpdlib.handlers import FTPHandler
 from pyftpdlib.servers import FTPServer
-
+rootpath = "root"
 def main():
     # Instantiate a dummy authorizer to handle user authentication
     authorizer = DummyAuthorizer()
 
     # Add a user with full r/w permissions
-    authorizer.add_user("user", "12345", R"C:\ftp_first_server_filesys", perm="elradfmw")
+    authorizer.add_user("user", "12345", rootpath, perm="elradfmw")
     # elradfmw stands for: 
     # e = change directories (CWD, CDUP commands)
     # l = list files (LIST, NLST, STAT, MLSD, MLST, SIZE commands)
     # r = retrieve file from the server (RETR command)
     # a = append data to an existing file (APPE command)
     # d = delete file or directory (DELE, RMD commands)
+
     # f = rename file or directory (RNFR, RNTO commands)
     # m = create directory (MKD command)
     # w = store a file on the server (STOR, STOU commands)
 
     # Allow anonymous connections
-    authorizer.add_anonymous(R"C:\ftp_first_server_filesys")
+    authorizer.add_anonymous(rootpath)
 
     # Instantiate an FTP handler
     handler = FTPHandler
