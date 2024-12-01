@@ -59,28 +59,27 @@ class CustomFS(AbstractedFS):
 
 
 class BetterFTPHandler(FTPHandler):
-    class BetterFTPHandler(FTPHandler):
-        def ftp_CREATESYMLINK(self, cmd):
-            try:
-                folder_to_share, folder_to_put_symlink, symlink_name = cmd.split(" ", 2)
+    def ftp_CREATESYMLINK(self, cmd):
+        try:
+            folder_to_share, folder_to_put_symlink, symlink_name = cmd.split(" ", 2)
 
-                # Resolve paths
-                shared_folder_path = self.fs.realpath(folder_to_share)
-                symlink_folder_path = self.fs.realpath(folder_to_put_symlink)
-                symlink_target = Path(symlink_folder_path) / symlink_name
+            # Resolve paths
+            shared_folder_path = self.fs.realpath(folder_to_share)
+            symlink_folder_path = self.fs.realpath(folder_to_put_symlink)
+            symlink_target = Path(symlink_folder_path) / symlink_name
 
-                if not Path(shared_folder_path).is_dir():
-                    return self.respond("550 The folder to share does not exist.")
-                if not Path(symlink_folder_path).is_dir():
-                    return self.respond("550 The folder to place the symbolic link does not exist.")
+            if not Path(shared_folder_path).is_dir():
+                return self.respond("550 The folder to share does not exist.")
+            if not Path(symlink_folder_path).is_dir():
+                return self.respond("550 The folder to place the symbolic link does not exist.")
 
-                # Create the symbolic link
-                symlink_target.symlink_to(shared_folder_path, target_is_directory=True)
-                self.fs.add_symlink_target(shared_folder_path)  
-                self.respond(f"250 Symbolic link {symlink_name} created.")
-            except Exception as e:
-                print(f"Error during CREATESYMLINK: {e}")
-                self.respond(f"550 Failed to create symbolic link: {str(e)}")
+            # Create the symbolic link
+            symlink_target.symlink_to(shared_folder_path, target_is_directory=True)
+            self.fs.add_symlink_target(shared_folder_path)  
+            self.respond(f"250 Symbolic link {symlink_name} created.")
+        except Exception as e:
+            print(f"Error during CREATESYMLINK: {e}")
+            self.respond(f"550 Failed to create symbolic link: {str(e)}")
 
     
 
