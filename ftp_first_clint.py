@@ -1,7 +1,7 @@
 from ftplib import FTP
 from pathlib import Path
 
-IP = "10.0.0.15"
+IP = "10.0.0.8"
 PORT = 2121
 
 def connect_to_ftp(user_num):
@@ -62,6 +62,20 @@ def move_down(ftp, folder_name):
     except Exception as e:
         print(f"Error moving into folder '{folder_name}': {e}")
 
+def share(ftp, folder_to_share, target_user_num, symlink_name):
+    
+    try:
+        folder_to_put_symlink = f"/root/user{target_user_num}folder"
+
+        command = f"CREATESYMLINK {folder_to_share} {folder_to_put_symlink} {symlink_name}"
+        print(f"Sending command: {repr(command)}") 
+        ftp.sendcmd(command)
+
+        print(f"Shared {folder_to_share} as {symlink_name} in {folder_to_put_symlink}.")
+    except Exception as e:
+        print(f"Failed to share folder: {e}")
+
+
 def main():
     ftp = None
     while True:
@@ -69,7 +83,7 @@ def main():
             user_num = input("Enter the number of the user to connect: ").strip()
             ftp = connect_to_ftp(user_num)
  
-        action = input("Enter action name (list, upload, download, delete, create_folder, move_up, move_down, switch_user, quit): ").strip().lower()
+        action = input("Enter action name (list, upload, download, delete, create_folder, move_up, move_down, share, switch_user, quit): ").strip().lower()
         
         if action == "list":
             list_files(ftp)
@@ -90,6 +104,12 @@ def main():
         elif action == "move_down":
             folder_name = input("Enter the name of the folder to move into: ").strip()
             move_down(ftp, folder_name)
+        elif action == "share":
+            folder_to_share = input("Enter the path of the folder to share: ").strip()
+            target_user_num = input("Enter the target user's number: ").strip()
+            link_name = input("Enter the name of the symbolic link: ").strip()
+            share(ftp, folder_to_share, target_user_num, link_name)
+
         elif action == "switch_user":
             logout_user(ftp)
             user_num = input("Enter the number of the new user to connect: ").strip()
