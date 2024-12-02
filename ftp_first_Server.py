@@ -9,46 +9,39 @@ class CustomFS(AbstractedFS):
         super().__init__(root, cmd_channel)
         self.allowed_symlink_targets = set()
         self.scan_symlinks()
+
     def scan_symlinks(self):
         """Scan the root directory and add symlink targets to the allowed list."""
-        try:
-            base_path = Path(self.root)
-            for item in base_path.rglob('*'):
-                if item.is_symlink():
-                    target = item.resolve()
-                    print(f"Discovered symlink: {item} -> {target}")
-                    self.allowed_symlink_targets.add(target)
-        except Exception as e:
-            print(f"Error scanning symlinks: {e}")
-
+        base_path = Path(self.root)
+        for item in base_path.rglob('*'):
+            if item.is_symlink():
+                target = item.resolve()
+                print(f"Discovered symlink: {item} -> {target}")
+                self.allowed_symlink_targets.add(target)
+       
     def add_symlink_target(self, symlink_path):
         """Add a symlink target to the allowed list."""
-        try:
-            target = Path(symlink_path).resolve()
-            self.allowed_symlink_targets.add(target)
-            print(f"Added symlink target: {target}")
-        except Exception as e:
-            print(f"Error adding symlink target: {e}")
+        target = Path(symlink_path).resolve()
+        self.allowed_symlink_targets.add(target)
+        print(f"Added symlink target: {target}")
+    
 
     def validpath(self, path):
         """Validate the resolved path."""
-        try:
-            real_path = Path(self.realpath(path)).resolve()
-            root_path = Path(self.root).resolve()
+        real_path = Path(self.realpath(path)).resolve()
+        root_path = Path(self.root).resolve()
 
-            # Allow paths within the jail
-            if root_path in real_path.parents or real_path == root_path:
-                return True
+        # Allow paths within the jail
+        if root_path in real_path.parents or real_path == root_path:
+            return True
 
-            # Allow paths that are in the allowed symlink targets
-            if real_path in self.allowed_symlink_targets:
-                return True
+        # Allow paths that are in the allowed symlink targets
+        if real_path in self.allowed_symlink_targets:
+            return True
 
-            print(f"Access denied: {real_path} is not within allowed paths or symlink targets")
-            return False
-        except Exception as e:
-            print(f"Path validation error: {e}")
-            return False
+        print(f"Access denied: {real_path} is not within allowed paths or symlink targets")
+        return False
+    
 
     def realpath(self, path):
         """Resolve the full path, allowing symlinks."""
@@ -59,41 +52,39 @@ class CustomFS(AbstractedFS):
 
 
 class BetterFTPHandler(FTPHandler):
-    class BetterFTPHandler(FTPHandler):
-        def ftp_CREATESYMLINK(self, cmd):
-            try:
-                folder_to_share, folder_to_put_symlink, symlink_name = cmd.split(" ", 2)
+    abstracted_fs = CustomFS 
 
-                # Resolve paths
-                shared_folder_path = self.fs.realpath(folder_to_share)
-                symlink_folder_path = self.fs.realpath(folder_to_put_symlink)
-                symlink_target = Path(symlink_folder_path) / symlink_name
+    def ftp_CREATESYMLINK(self, cmd):
+        try:
+            folder_to_share, folder_to_put_symlink, symlink_name = cmd.split(" ", 2)
 
-                if not Path(shared_folder_path).is_dir():
-                    return self.respond("550 The folder to share does not exist.")
-                if not Path(symlink_folder_path).is_dir():
-                    return self.respond("550 The folder to place the symbolic link does not exist.")
+            shared_folder_path = self.fs.realpath(folder_to_share)
+            symlink_folder_path = self.fs.realpath(folder_to_put_symlink)
+            symlink_target = Path(symlink_folder_path) / symlink_name
 
-                # Create the symbolic link
-                symlink_target.symlink_to(shared_folder_path, target_is_directory=True)
-                self.fs.add_symlink_target(shared_folder_path)  
-                self.respond(f"250 Symbolic link {symlink_name} created.")
-            except Exception as e:
-                print(f"Error during CREATESYMLINK: {e}")
-                self.respond(f"550 Failed to create symbolic link: {str(e)}")
+            if not Path(shared_folder_path).is_dir():
+                return self.respond("550 The folder to share does not exist.")
+            if not Path(symlink_folder_path).is_dir():
+                return self.respond("550 The folder to place the symbolic link does not exist.")
 
-    
+            symlink_target.symlink_to(shared_folder_path, target_is_directory=True)
+            self.fs.add_symlink_target(shared_folder_path)  # Add target to the allowed list
+            self.respond(f"250 Symbolic link {symlink_name} created.")
+        except Exception as e:
+            print(f"Error during CREATESYMLINK: {e}")
+            self.respond(f"550 Failed to create symbolic link: {str(e)}")
 
 # Add custom command to proto_cmds
 BetterFTPHandler.proto_cmds["CREATESYMLINK"] = {
     "perm": "elradfmw",  # Required permissions
-    "auth": True,        # Requires authentications
+    "auth": True,        # Requires authentication
     "arg": True,         # Requires arguments
     "help": "Syntax: CREATESYMLINK <folder_to_share> <folder_to_put_symlink> <symlink_name>."
 }
 
 def main():
     authorizer = DummyAuthorizer()
+
     for i in range(5):
         user_name = f"user{i}"
         password = "12345"
