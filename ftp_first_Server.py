@@ -66,6 +66,10 @@ class BetterFTPHandler(FTPHandler):
                 return self.respond("550 The folder to share does not exist.")
             if not Path(symlink_folder_path).is_dir():
                 return self.respond("550 The folder to place the symbolic link does not exist.")
+            if not Path(shared_folder_path).is_dir():
+                return self.respond("550 The folder to share does not exist.")
+            if not Path(symlink_folder_path).is_dir():
+                return self.respond("550 The folder to place the symbolic link does not exist.")
 
             symlink_target.symlink_to(shared_folder_path, target_is_directory=True)
             self.fs.add_symlink_target(shared_folder_path)  # Add target to the allowed list
