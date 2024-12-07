@@ -1,0 +1,18 @@
+import socket
+
+# Create a TCP/IP socket
+my_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+
+# Connect the socket to the server's port
+my_socket.connect(("127.0.0.1", 8820))
+
+# Send data
+my_socket.sendall("client sends hallo".encode())
+
+# Receive response
+data = my_socket.recv(1024).decode()
+
+print("The server sent: " + data)
+
+# Close the socket
+my_socket.close()
