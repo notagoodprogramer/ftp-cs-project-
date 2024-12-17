@@ -2,108 +2,101 @@ from pathlib import Path
 import shutil
 import socket
 import threading
-
-class FTPHandler:
+import cmd
+class FTPHandler(cmd.Cmd):
+    prompt = ""  
     def __init__(self, root: str) -> None:
+        super().__init__()
         self.root = Path(root).resolve()
         self.current_dir = self.root
 
     def handle_connection(self, client_socket: socket.socket) -> None:
-        """
-        Handles the communication with a connected client.
-        """
-        try:
-            while True:
-                header = client_socket.recv(4)
-                if not header:
-                    print("Client disconnected.")
-                    break
+        self.client_socket = client_socket  
+        while True:  
+            header = self.client_socket.recv(4)  
+            if not header:
+                print("Client disconnected.")
+                break 
+            data_size = int.from_bytes(header, byteorder='big')
+            command = self.receive_command(data_size).decode()
+            
+            if command.lower() == "quit":
+                self.send_response("Goodbye!")
+                break  
 
-                data_size = int.from_bytes(header, byteorder='big')
-                command = self.receive_all(client_socket, data_size).decode()
-                print(f"Received command: {command}")
+            self.onecmd(command)  
+       
+    def precmd(self, line):
+        return line.strip()
 
-                response = self.handle_cmd(command)
-                response_bytes = response.encode()
-                response_size = len(response_bytes)
-                client_socket.sendall(response_size.to_bytes(4, byteorder='big'))
-                client_socket.sendall(response_bytes)
-        except ConnectionError as e:
-            print(f"Connection error: {e}")
+    def default(self, line):
+        self.send_response(f"Unknown command: {line.split()[0] if line else ''}")
 
-    def handle_cmd(self, cmd: str) -> str:
-        cmd_split = cmd.strip().split()
-        cmd_name = cmd_split[0].upper()
-        args = cmd_split[1:]
-        if cmd_name == "LIST":
-            return self.handle_list()
-        elif cmd_name == "CWD":
-            return self.handle_cwd(args)
-        elif cmd_name == "MKDIR":
-            return self.handle_make_dir(args)
-        elif cmd_name == "DELETE":
-            return self.handle_delete(args)
-        else:
-            return f"Unknown command: {cmd_name}"
-
-    def handle_list(self) -> str:
+    def do_LIST(self, arg):
         files = "\r\n".join(f.name for f in self.current_dir.iterdir())
-        return f"The files in the current directory are:\r\n{files}\r\n"
+        self.send_response(f"The files in the current directory are:\r\n{files}\r\n")
 
-    
+    def do_CWD(self, arg):
+        if not arg:
+            self.send_response("CWD command requires a target directory.")
+            return
 
-    def handle_cwd(self, args: list) -> str:
-        if not args:
-            return "CWD command requires a target directory."
-
-        target = args[0]
+        target = arg.strip()
         if target == "..":
             if self.current_dir == self.root:
-                return "Already at the root directory; cannot move up."
-            self.current_dir = self.current_dir.parent
-            return f"Changed working directory to {self.current_dir.relative_to(self.root)}."
-
-        target_path = self.current_dir / target
-
-        if target_path.is_dir():
-            self.current_dir = target_path
-            return f"Changed working directory to {self.current_dir.relative_to(self.root)}."
+                self.send_response("Already at the root directory; cannot move up.")
+            else:
+                self.current_dir = self.current_dir.parent
+                self.send_response(f"Changed working directory to {self.current_dir.relative_to(self.root)}.")
         else:
-            return f"Directory '{target}' does not exist."
+            target_path = self.current_dir / target
+            if target_path.is_dir():
+                self.current_dir = target_path
+                self.send_response(f"Changed working directory to {self.current_dir.relative_to(self.root)}.")
+            else:
+                self.send_response(f"Directory '{target}' does not exist.")
 
+    def do_MKDIR(self, arg):
+        if not arg:
+            self.send_response("MKDIR command requires a directory name.")
+            return
+        dir_path = self.current_dir / arg.strip()
+        dir_path.mkdir(exist_ok=True)
+        self.send_response(f"Directory '{arg}' created successfully.")
 
+    def do_DELETE(self, arg):
+        if not arg:
+            self.send_response("DELETE command requires a target file or directory.")
+            return
 
-
-    def handle_make_dir(self, args: list) -> str:
-        if not args:
-            return "MKDIR command requires a directory name."
-        dir_path = self.current_dir / args[0]
-        dir_path.mkdir()
-        return f"Directory '{args[0]}' created successfully."
-
-    def handle_delete(self, args: list) -> str:
-        if not args:
-            return "DELETE command requires a target file or directory."
-        target = (self.current_dir / args[0]).resolve()
+        target = (self.current_dir / arg.strip()).resolve()
         if target.is_file():
             target.unlink()
-            return f"File '{args[0]}' deleted successfully."
+            self.send_response(f"File '{arg}' deleted successfully.")
         elif target.is_dir():
             shutil.rmtree(target)
-            return f"Directory '{args[0]}' deleted successfully."
+            self.send_response(f"Directory '{arg}' deleted successfully.")
         else:
-            return f"Target '{args[0]}' does not exist."
+            self.send_response(f"Target '{arg}' does not exist.")
 
-    def receive_all(self, client_socket: socket.socket, size: int) -> bytes:
+    def do_quit(self, arg):
+        self.send_response("Goodbye!")
+        return True  
+    
+    def send_response(self, response: str):
+        response_bytes = response.encode()
+        response_size = len(response_bytes)
+        self.client_socket.sendall(response_size.to_bytes(4, byteorder='big'))
+        self.client_socket.sendall(response_bytes)
+        
+    def receive_command(self, size):
         data = b''
         while len(data) < size:
-            packet = client_socket.recv(size - len(data))
+            packet = self.client_socket.recv(size - len(data))
             if not packet:
-                raise ConnectionError("Connection lost before all data was received.")
+                raise ConnectionError("Connection lost while receiving data.")
             data += packet
         return data
-
-
 class TCPServer:
     def __init__(self, host: str, port: int, root: str) -> None:
         self.host = host
