@@ -11,7 +11,7 @@ class TCPClient:
             print(f"Connected to {self.host}:{self.port}")
 
             while True:
-                command = input("Enter a command (or 'quit' to exit): ").strip().upper()
+                command = input("Enter a command (or 'quit' to exit): ").strip()
                 if not command:
                     continue  
                 

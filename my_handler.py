@@ -27,7 +27,20 @@ class FTPHandler(cmd.Cmd):
             self.onecmd(command)  
        
     def precmd(self, line):
-        return line.strip()
+       return line.strip()
+    def onecmd(self, line):
+        if not line.strip():
+            return False  
+
+        command, _, arg = line.partition(" ")
+        command = command.upper() 
+        method = getattr(self, f"do_{command}", None) 
+
+        if method:
+            return method(arg) 
+        else:
+            self.default(line)
+            return False
 
     def default(self, line):
         self.send_response(f"Unknown command: {line.split()[0] if line else ''}")
