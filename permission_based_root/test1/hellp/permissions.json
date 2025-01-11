@@ -1,0 +1,12 @@
+{
+    "owner": "test1",
+    "permissions": {
+        "test1": [
+            "read",
+            "write",
+            "mkdir",
+            "delete",
+            "access"
+        ]
+    }
+}

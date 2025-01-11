@@ -1,0 +1,13 @@
+{
+    "owner": "user1",
+    "dir_permissions": {
+        "user1": [
+            "read",
+            "write",
+            "mkdir",
+            "delete",
+            "access"
+        ]
+    },
+    "files": {}
+}
