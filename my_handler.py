@@ -4,28 +4,34 @@ from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread
 from cmd import Cmd
 import json
+import random
 
 PERMISSIONS_FILE = ".permissions.json"
+IP = "127.0.0.1"
+PORT = 12345
 
+def get_available_port():
+    with socket(AF_INET, SOCK_STREAM) as temp_socket:
+        temp_socket.bind(("", 0))
+        return temp_socket.getsockname()[1]
 class FTPHandler(Cmd):
     prompt = ""
-
+    
     def __init__(self, root: str) -> None:
         super().__init__()
         self.root = Path(root).resolve()
         self.current_dir = None
         self.username = None
         self.setup_root_permissions()
-
+        
     def handle_connection(self, client_socket: socket) -> None:
         self.client_socket = client_socket
         while True:
             header = self.client_socket.recv(4)
             if not header:
-                print("Client disconnected.")
                 break
             data_size = int.from_bytes(header, byteorder="big")
-            command = self.receive_command(data_size).decode()
+            command = self.receive_data(data_size).decode()
 
             if command.lower() == "quit":
                 self.send_response("Goodbye!")
@@ -42,6 +48,7 @@ class FTPHandler(Cmd):
 
         command, _, arg = line.partition(" ")
         command = command.upper()
+        
         method = getattr(self, f"do_{command}", None)
 
         if method:
@@ -157,20 +164,23 @@ class FTPHandler(Cmd):
         return True
 
     def has_permission(self, path: Path, permission: str) -> bool:
-        permissions_file = path / PERMISSIONS_FILE
+        permissions_file = (path if path.is_dir() else path.parent) / PERMISSIONS_FILE
         if not permissions_file.exists():
             return False
 
         with permissions_file.open("r") as f:
             permissions = json.load(f)
 
+        # Check directory-level permissions
+        if path.is_dir():
+            dir_permissions = permissions.get("dir_permissions", {}).get(self.username, [])
+            return permission in dir_permissions
+
+        # Check file-level permissions
         fle = permissions.get("files", {}).get(path.name, {})
         user_permissions = fle.get("permissions", {}).get(self.username, [])
-        if permission in user_permissions:
-            return True
+        return permission in user_permissions
 
-        dir_permissions = permissions.get("dir_permissions", {}).get(self.username, [])
-        return permission in dir_permissions
 
     def do_CREATEUSER(self, username: str) -> None:
         username = username.strip()
@@ -224,7 +234,6 @@ class FTPHandler(Cmd):
             }
             with permissions_file.open("w") as f:
                 json.dump(permissions, f, indent=4)
-            print(f"Created root permissions file at {permissions_file}")
 
     def send_response(self, response: str) -> None:
         response_bytes = response.encode()
@@ -232,16 +241,105 @@ class FTPHandler(Cmd):
         self.client_socket.sendall(response_size.to_bytes(4, byteorder="big"))
         self.client_socket.sendall(response_bytes)
 
-    def receive_command(self, size: int) -> bytes:
+    def receive_data(self, size: int) -> bytes:
         data = b""
         while len(data) < size:
             packet = self.client_socket.recv(size - len(data))
             if not packet:
-                raise ConnectionError("Connection lost while receiving data.")
+                raise ConnectionError("Connection closed by client.")
             data += packet
+        if len(data) != size:
+            raise ValueError(f"Expected {size} bytes, but only received {len(data)} bytes.")
         return data
 
+    def do_UPLOAD(self, filename: str) -> None:
+        if self.current_dir is None:
+            self.send_response("You must log in first using the LOGIN command.")
+            return
 
+        if not filename:
+            self.send_response("UPLOAD command requires a filename.")
+            return
+        
+        if not self.has_permission(self.current_dir, "write"):
+            self.send_response("Access denied: You do not have permission to upload items here.")
+            return
+
+        if filename == PERMISSIONS_FILE:
+            self.send_response(f"Cannot upload file with name {PERMISSIONS_FILE}.")
+            return
+    
+        port = get_available_port()
+        self.send_response(f"READY {port}")
+        Thread(target=self.handle_upload, args=(port,)).start()
+
+    def handle_upload(self, port: int) -> None:
+        with socket(AF_INET, SOCK_STREAM) as upload_socket:
+            upload_socket.bind((IP, port))
+            upload_socket.listen(1)
+            conn, _ = upload_socket.accept()
+            with conn:
+                header_size = int.from_bytes(conn.recv(4), byteorder="big")
+                header = conn.recv(header_size).decode()
+                file_name, file_size = header.split("|")
+                file_size = int(file_size)
+
+                file_path = self.current_dir / file_name
+                with file_path.open("wb") as f:
+                    remaining = file_size
+                    while remaining > 0:
+                        chunk = conn.recv(min(4096, remaining))
+                        if not chunk:
+                            raise ConnectionError("Connection lost during upload.")
+                        f.write(chunk)
+                        remaining -= len(chunk)
+
+                conn.sendall(b"Upload complete.")
+    
+
+    def do_DOWNLOAD(self, filename: str) -> None:
+        if self.current_dir is None:
+            self.send_response("You must log in first using the LOGIN command.")
+            return
+
+        if not filename:
+            self.send_response("DOWNLOAD command requires a filename.")
+            return
+        
+        if not self.has_permission(self.current_dir, "read"):
+            self.send_response("Access denied: You do not have permission to download items here.")
+            return
+
+        file_path = self.current_dir / filename.strip()
+        if not file_path.is_file():
+            self.send_response(f"File '{filename}' does not exist.")
+            return
+
+        port = get_available_port()
+        self.send_response(f"READY {port}")
+        Thread(target=self.handle_download, args=(file_path, port)).start()
+
+    def handle_download(self, file_path: Path, port: int) -> None:
+        with socket(AF_INET, SOCK_STREAM) as download_socket:
+            download_socket.bind((IP, port))
+            download_socket.listen(1)
+            conn, _ = download_socket.accept()
+            with conn:
+                file_size = file_path.stat().st_size
+                header = f"{file_path.name}|{file_size}".encode()
+                conn.sendall(len(header).to_bytes(4, byteorder="big"))
+                conn.sendall(header)
+
+                with file_path.open("rb") as f:
+                    while chunk := f.read(4096):
+                        conn.sendall(chunk)
+
+                ack = conn.recv(1024)
+                if ack != b"ACK":
+                    print("Download: No proper acknowledgment received.")
+                else:
+                    print("Download: Transfer completed successfully.")
+                
 class TCPServer:
     def __init__(self, host: str, port: int, root: str) -> None:
         self.host = host
@@ -252,11 +350,9 @@ class TCPServer:
         with socket(AF_INET, SOCK_STREAM) as server_socket:
             server_socket.bind((self.host, self.port))
             server_socket.listen(5)
-            print(f"Server listening on {self.host}:{self.port}")
-
+            
             while True:
-                client_socket, client_address = server_socket.accept()
-                print(f"Connection established with {client_address}")
+                client_socket, _ = server_socket.accept()
                 Thread(
                     target=self.handle_client, args=(client_socket,)
                 ).start()
@@ -269,5 +365,5 @@ class TCPServer:
 
 if __name__ == "__main__":
     root_directory = "file_perm_root"
-    server = TCPServer("127.0.0.1", 12345, root_directory)
+    server = TCPServer(IP, PORT, root_directory)
     server.start()
