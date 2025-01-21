@@ -4,27 +4,52 @@ from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread
 from cmd import Cmd
 import json
-import random
 
 PERMISSIONS_FILE = ".permissions.json"
 IP = "127.0.0.1"
 PORT = 12345
 
-def get_available_port():
+def get_available_port() -> int:
+    """Get an available port for file transfer."""
     with socket(AF_INET, SOCK_STREAM) as temp_socket:
-        temp_socket.bind(("", 0))
+        temp_socket.bind((IP, 0))
         return temp_socket.getsockname()[1]
+
 class FTPHandler(Cmd):
+    """FTPHandler implements a command-line based FTP server."""
+
     prompt = ""
-    
+
     def __init__(self, root: str) -> None:
+        """Initialize the FTPHandler.
+
+        Args:
+            root (str): The root directory for the FTP server.
+        """
         super().__init__()
         self.root = Path(root).resolve()
         self.current_dir = None
         self.username = None
         self.setup_root_permissions()
-        
+
+    def setup_root_permissions(self) -> None:
+        """Set up root permissions if the permissions file does not exist."""
+        permissions_file = self.root / PERMISSIONS_FILE
+        if not permissions_file.exists():
+            permissions = {
+                "owner": "admin",
+                "dir_permissions": {},
+                "files": {}
+            }
+            with permissions_file.open("w") as f:
+                json.dump(permissions, f, indent=4)
+
     def handle_connection(self, client_socket: socket) -> None:
+        """Handle a client connection.
+
+        Args:
+            client_socket (socket): The client socket.
+        """
         self.client_socket = client_socket
         while True:
             header = self.client_socket.recv(4)
@@ -39,16 +64,55 @@ class FTPHandler(Cmd):
 
             self.onecmd(command)
 
+    def send_response(self, response: str) -> None:
+        """Send a response to the client.
+
+        Args:
+            response (str): The response message.
+        """
+        response_bytes = response.encode()
+        response_size = len(response_bytes)
+        self.client_socket.sendall(response_size.to_bytes(4, byteorder="big"))
+        self.client_socket.sendall(response_bytes)
+
+    def receive_data(self, size: int) -> bytes:
+        """Receive data from the client.
+
+        Args:
+            size (int): Number of bytes to receive.
+
+        Returns:
+            bytes: The received data.
+        """
+        data = b""
+        while len(data) < size:
+            packet = self.client_socket.recv(size - len(data))
+            if not packet:
+                raise ConnectionError("Connection closed by client.")
+            data += packet
+        if len(data) != size:
+            raise ValueError(f"Expected {size} bytes, but only received {len(data)} bytes.")
+        return data
+
     def precmd(self, line: str) -> str:
+        """Strip the line before executing it."""
         return line.strip()
 
     def onecmd(self, line: str) -> bool:
+        """Execute a single command.
+
+        Args:
+            line (str): The command line input.
+
+        Returns:
+            bool: Whether to stop the command loop.
+        """
         if not line.strip():
             return False
 
         command, _, arg = line.partition(" ")
         command = command.upper()
-        
+
         method = getattr(self, f"do_{command}", None)
 
         if method:
@@ -58,9 +122,89 @@ class FTPHandler(Cmd):
             return False
 
     def default(self, line: str) -> None:
+        """Handle unknown commands."""
         self.send_response(f"Unknown command: {line.split()[0] if line else ''}")
 
+
+    def has_permission(self, path: Path, permission: str) -> bool:
+        """Check if the user has a specific permission on a path.
+
+        Args:
+            path (Path): The path to check.
+            permission (str): The permission to check for.
+
+        Returns:
+            bool: True if the user has the permission, False otherwise.
+        """
+        permissions_file = (path if path.is_dir() else path.parent) / PERMISSIONS_FILE
+        if not permissions_file.exists():
+            return False
+
+        with permissions_file.open("r") as f:
+            permissions = json.load(f)
+
+        if path.is_dir():
+            dir_permissions = permissions.get("dir_permissions", {}).get(self.username, [])
+            return permission in dir_permissions
+
+        file_permissions = permissions.get("files", {}).get(path.name, {}).get("permissions", {}).get(self.username, [])
+        return permission in file_permissions
+
+    def do_LOGIN(self, username: str) -> None:
+        """Log in as a user.
+
+        Args:
+            username (str): The username to log in as.
+        """
+        username = username.strip()
+        user_root = self.root / username
+
+        if not user_root.exists() or not user_root.is_dir():
+            self.send_response(f"User '{username}' does not exist.")
+            return
+
+        self.username = username
+        self.current_dir = user_root
+        self.send_response(f"Logged in as '{username}'. Home directory is {user_root}.")
+
+    def do_LOGOUT(self, arg: str) -> None:
+        """Log out the current user."""
+        if self.username is None:
+            self.send_response("You are not logged in.")
+            return
+
+        self.username = None
+        self.current_dir = None
+        self.send_response("Logged out successfully.")
+
+    def do_CREATEUSER(self, username: str) -> None:
+        """Create a new user.
+
+        Args:
+            username (str): The username of the new user.
+        """
+        username = username.strip()
+        user_root = self.root / username
+        if user_root.exists():
+            self.send_response(f"User '{username}' already exists.")
+            return
+
+        user_root.mkdir(parents=True, exist_ok=True)
+        permissions_file = user_root / PERMISSIONS_FILE
+        permissions = {
+            "owner": username,
+            "dir_permissions": {
+                username: ["read", "write", "mkdir", "delete", "access"]
+            },
+            "files": {}
+        }
+        with permissions_file.open("w") as f:
+            json.dump(permissions, f, indent=4)
+
+        self.send_response(f"User '{username}' created successfully. Home directory is {user_root}.")
+
     def do_LIST(self, arg: str) -> None:
+        """List files in the current directory."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -75,6 +219,7 @@ class FTPHandler(Cmd):
         self.send_response(f"The files in the current directory are:\r\n{files}")
 
     def do_CWD(self, arg: str) -> None:
+        """Change the current working directory."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -101,6 +246,7 @@ class FTPHandler(Cmd):
         self.send_response(f"Changed working directory to {self.current_dir.relative_to(self.root / self.username)}.")
 
     def do_MKDIR(self, arg: str) -> None:
+        """Create a new directory."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -132,6 +278,7 @@ class FTPHandler(Cmd):
         self.send_response(f"Directory '{arg}' created successfully.")
 
     def do_DELETE(self, arg: str) -> None:
+        """Delete a file or directory."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -159,100 +306,8 @@ class FTPHandler(Cmd):
         else:
             self.send_response(f"Target '{arg}' does not exist.")
 
-    def do_quit(self, arg: str) -> bool:
-        self.send_response("Goodbye!")
-        return True
-
-    def has_permission(self, path: Path, permission: str) -> bool:
-        permissions_file = (path if path.is_dir() else path.parent) / PERMISSIONS_FILE
-        if not permissions_file.exists():
-            return False
-
-        with permissions_file.open("r") as f:
-            permissions = json.load(f)
-
-        # Check directory-level permissions
-        if path.is_dir():
-            dir_permissions = permissions.get("dir_permissions", {}).get(self.username, [])
-            return permission in dir_permissions
-
-        # Check file-level permissions
-        fle = permissions.get("files", {}).get(path.name, {})
-        user_permissions = fle.get("permissions", {}).get(self.username, [])
-        return permission in user_permissions
-
-
-    def do_CREATEUSER(self, username: str) -> None:
-        username = username.strip()
-        user_root = self.root / username
-        if user_root.exists():
-            self.send_response(f"User '{username}' already exists.")
-            return
-
-        user_root.mkdir(parents=True, exist_ok=True)
-        permissions_file = user_root / PERMISSIONS_FILE
-        permissions = {
-            "owner": username,
-            "dir_permissions": {
-                username: ["read", "write", "mkdir", "delete", "access"]
-            },
-            "files": {}
-        }
-        with permissions_file.open("w") as f:
-            json.dump(permissions, f, indent=4)
-
-        self.send_response(f"User '{username}' created successfully. Home directory is {user_root}.")
-
-    def do_LOGIN(self, username: str) -> None:
-        username = username.strip()
-        user_root = self.root / username
-
-        if not user_root.exists() or not user_root.is_dir():
-            self.send_response(f"User '{username}' does not exist.")
-            return
-
-        self.username = username
-        self.current_dir = user_root
-        self.send_response(f"Logged in as '{username}'. Home directory is {user_root}.")
-
-    def do_LOGOUT(self, arg: str) -> None:
-        if self.username is None:
-            self.send_response("You are not logged in.")
-            return
-
-        self.username = None
-        self.current_dir = None
-        self.send_response("Logged out successfully.")
-
-    def setup_root_permissions(self) -> None:
-        permissions_file = self.root / PERMISSIONS_FILE
-        if not permissions_file.exists():
-            permissions = {
-                "owner": "admin",
-                "dir_permissions": {},
-                "files": {}
-            }
-            with permissions_file.open("w") as f:
-                json.dump(permissions, f, indent=4)
-
-    def send_response(self, response: str) -> None:
-        response_bytes = response.encode()
-        response_size = len(response_bytes)
-        self.client_socket.sendall(response_size.to_bytes(4, byteorder="big"))
-        self.client_socket.sendall(response_bytes)
-
-    def receive_data(self, size: int) -> bytes:
-        data = b""
-        while len(data) < size:
-            packet = self.client_socket.recv(size - len(data))
-            if not packet:
-                raise ConnectionError("Connection closed by client.")
-            data += packet
-        if len(data) != size:
-            raise ValueError(f"Expected {size} bytes, but only received {len(data)} bytes.")
-        return data
-
     def do_UPLOAD(self, filename: str) -> None:
+        """Upload a file to the server."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -260,7 +315,7 @@ class FTPHandler(Cmd):
         if not filename:
             self.send_response("UPLOAD command requires a filename.")
             return
-        
+
         if not self.has_permission(self.current_dir, "write"):
             self.send_response("Access denied: You do not have permission to upload items here.")
             return
@@ -268,12 +323,13 @@ class FTPHandler(Cmd):
         if filename == PERMISSIONS_FILE:
             self.send_response(f"Cannot upload file with name {PERMISSIONS_FILE}.")
             return
-    
+
         port = get_available_port()
         self.send_response(f"READY {port}")
         Thread(target=self.handle_upload, args=(port,)).start()
 
     def handle_upload(self, port: int) -> None:
+        """Handle the upload process for a file."""
         with socket(AF_INET, SOCK_STREAM) as upload_socket:
             upload_socket.bind((IP, port))
             upload_socket.listen(1)
@@ -295,9 +351,9 @@ class FTPHandler(Cmd):
                         remaining -= len(chunk)
 
                 conn.sendall(b"Upload complete.")
-    
 
     def do_DOWNLOAD(self, filename: str) -> None:
+        """Download a file from the server."""
         if self.current_dir is None:
             self.send_response("You must log in first using the LOGIN command.")
             return
@@ -305,7 +361,7 @@ class FTPHandler(Cmd):
         if not filename:
             self.send_response("DOWNLOAD command requires a filename.")
             return
-        
+
         if not self.has_permission(self.current_dir, "read"):
             self.send_response("Access denied: You do not have permission to download items here.")
             return
@@ -320,6 +376,7 @@ class FTPHandler(Cmd):
         Thread(target=self.handle_download, args=(file_path, port)).start()
 
     def handle_download(self, file_path: Path, port: int) -> None:
+        """Handle the download process for a file."""
         with socket(AF_INET, SOCK_STREAM) as download_socket:
             download_socket.bind((IP, port))
             download_socket.listen(1)
@@ -339,31 +396,3 @@ class FTPHandler(Cmd):
                     print("Download: No proper acknowledgment received.")
                 else:
                     print("Download: Transfer completed successfully.")
-                
-class TCPServer:
-    def __init__(self, host: str, port: int, root: str) -> None:
-        self.host = host
-        self.port = port
-        self.root = root
-
-    def start(self) -> None:
-        with socket(AF_INET, SOCK_STREAM) as server_socket:
-            server_socket.bind((self.host, self.port))
-            server_socket.listen(5)
-            
-            while True:
-                client_socket, _ = server_socket.accept()
-                Thread(
-                    target=self.handle_client, args=(client_socket,)
-                ).start()
-
-    def handle_client(self, client_socket: socket) -> None:
-        with client_socket:
-            handler = FTPHandler(self.root)
-            handler.handle_connection(client_socket)
-
-
-if __name__ == "__main__":
-    root_directory = "file_perm_root"
-    server = TCPServer(IP, PORT, root_directory)
-    server.start()
