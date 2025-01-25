@@ -144,10 +144,12 @@ class FTPHandler(Cmd):
             permissions = json.load(f)
 
         if path.is_dir():
-            dir_permissions = permissions.get("dir_permissions", {}).get(self.username, [])
-            return permission in dir_permissions
+            dir_permissions = permissions.get("dir_permissions", {})
+            user_permissions = dir_permissions.get(self.username, []) + dir_permissions.get("*", [])
+            return permission in user_permissions
 
-        file_permissions = permissions.get("files", {}).get(path.name, {}).get("permissions", {}).get(self.username, [])
+        file_permissions = permissions.get("files", {}).get(path.name, {}).get("permissions", {})
+        user_permissions = file_permissions.get(self.username, []) + file_permissions.get("*", [])
         return permission in file_permissions
 
     def do_LOGIN(self, username: str) -> None:
@@ -195,11 +197,27 @@ class FTPHandler(Cmd):
             "owner": username,
             "dir_permissions": {
                 username: ["read", "write", "mkdir", "delete", "access"]
+               
             },
             "files": {}
         }
         with permissions_file.open("w") as f:
             json.dump(permissions, f, indent=4)
+
+        shared_dir = user_root / "shared"
+        shared_dir.mkdir(exist_ok=True)
+
+        shared_permissions_file = shared_dir / PERMISSIONS_FILE
+        shared_permissions = {
+            "owner": username,
+            "dir_permissions": {
+                username: ["read", "write", "mkdir", "delete", "access"],
+                "*": ["write"] 
+            },
+            "files": {}
+        }
+        with shared_permissions_file.open("w") as f:
+            json.dump(shared_permissions, f, indent=4)
 
         self.send_response(f"User '{username}' created successfully. Home directory is {user_root}.")
 
@@ -396,3 +414,95 @@ class FTPHandler(Cmd):
                     print("Download: No proper acknowledgment received.")
                 else:
                     print("Download: Transfer completed successfully.")
+
+    def do_SHARE(self, args: str) -> None:
+        """Share a file or directory with another user.
+
+        Args:
+            args (str): Arguments in the format "<name> <user_to_share_with> [permissions]".
+        """
+        if self.current_dir is None:
+            self.send_response("You must log in first using the LOGIN command.")
+            return
+
+        parts = args.split()
+        if len(parts) < 2:
+            self.send_response("SHARE command requires at least a file/directory name and a recipient username.")
+            return
+
+        target_name, user_to_share_with = parts[:2]
+        permissions = parts[2:] if len(parts) > 2 else None
+
+        target = (self.current_dir / target_name).resolve()
+
+        if not target.exists():
+            self.send_response(f"Target '{target_name}' does not exist.")
+            return
+
+        if not (self.has_permission(target, "read") or self.has_permission(target.parent, "read")):
+            self.send_response("Access denied: You do not have permission to share this item.")
+            return
+
+        recipient_root = self.root / user_to_share_with
+        if not recipient_root.exists() or not recipient_root.is_dir():
+            self.send_response(f"Recipient '{user_to_share_with}' does not exist.")
+            return
+
+        recipient_shared_dir = recipient_root / "shared"
+        if not recipient_shared_dir.exists():
+            recipient_shared_dir.mkdir(exist_ok=True)
+
+        if not self.has_permission(recipient_shared_dir, "write"):
+            self.send_response("Access denied: Sender does not have write access to their shared directory.")
+            return
+
+        symlink_path = recipient_shared_dir / target.name
+        if symlink_path.exists():
+            self.send_response(f"The recipient already has a shared item named '{target.name}'.")
+            return
+
+        symlink_path.symlink_to(target, target.is_dir())
+
+        def update_permissions_recursively(path: Path, permissions_data: dict, sharer_permissions: list):
+            if path.is_dir():
+                dir_permissions = permissions_data.setdefault("dir_permissions", {})
+                recipient_permissions = dir_permissions.setdefault(user_to_share_with, [])
+
+                for perm in sharer_permissions:
+                    if perm not in recipient_permissions:
+                        recipient_permissions.append(perm)
+
+                for sub_path in path.iterdir():
+                    sub_permissions_file = sub_path / PERMISSIONS_FILE if sub_path.is_dir() else sub_path.parent / PERMISSIONS_FILE
+                    if sub_permissions_file.exists():
+                        with sub_permissions_file.open("r") as f:
+                            sub_permissions_data = json.load(f)
+
+                        update_permissions_recursively(sub_path, sub_permissions_data, sharer_permissions)
+
+                        with sub_permissions_file.open("w") as f:
+                            json.dump(sub_permissions_data, f, indent=4)
+            else:
+                file_permissions = permissions_data.get("files", {}).get(path.name, {}).get("permissions", {})
+                if file_permissions:  
+                    recipient_permissions = file_permissions.setdefault(user_to_share_with, [])
+
+                    for perm in sharer_permissions:
+                        if perm not in recipient_permissions:
+                            recipient_permissions.append(perm)
+
+        with (target.parent / PERMISSIONS_FILE).open("r") as f:
+            permissions_data = json.load(f)
+
+        sharer_permissions = permissions_data.get("dir_permissions", {}).get(self.username, [])
+
+        if permissions:
+            sharer_permissions = [perm for perm in sharer_permissions if perm in permissions]
+
+        update_permissions_recursively(target, permissions_data, sharer_permissions)
+
+        with (target.parent / PERMISSIONS_FILE).open("w") as f:
+            json.dump(permissions_data, f, indent=4)
+
+        self.send_response(f"'{target.name}' has been shared with '{user_to_share_with}' successfully.")
+
