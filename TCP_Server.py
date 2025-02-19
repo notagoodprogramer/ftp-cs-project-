@@ -1,6 +1,6 @@
 from socket import socket, AF_INET, SOCK_STREAM
 from threading import Thread
-from my_handler import FTPHandler
+from small_handler import FTPHandler
 
 PERMISSIONS_FILE = ".permissions.json"
 IP = "127.0.0.1"
