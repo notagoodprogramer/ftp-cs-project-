@@ -14,6 +14,7 @@ from socket import socket, AF_INET, SOCK_STREAM
 PERMISSIONS_FILE = ".permissions.json"
 SECRET_KEY = "very_secret"
 IP = "127.0.0.1"  
+HOME_DIR_ROOT = "file_perm_root"
 
 class FTPHandler(Cmd):
     prompt = ""
@@ -266,5 +267,136 @@ class FTPHandler(Cmd):
                 sc.send_file(file_path)
         Thread(target=listener).start()
         self.secure_conn.send_message(f"READY {port}")
+        
+    def do_SHARE(self, args: str) -> None:
+        """
+        Share a file or directory with another user.
+        Command format: SHARE <target> <recipient> [read]
+        
+        If the optional third argument is provided and is "read", then only "read"
+        permission is granted; otherwise, default is ["read", "write"].
+        The shared symlink in the recipient's shared folder is named with the 
+        sharer's username as a prefix.
+        """
+        if self.current_dir is None:
+            self.secure_conn.send_message("You must log in first.")
+            return
 
+        parts = args.split()
+        if len(parts) < 2:
+            self.secure_conn.send_message("Usage: SHARE <target> <recipient> [read]")
+            return
 
+        target_name, recipient = parts[0], parts[1]
+        perms = ["read", "write"]
+        if len(parts) >= 3 and parts[2].lower() == "read":
+            perms = ["read"]
+
+        target = (self.current_dir / target_name).resolve()
+        if not target.exists():
+            self.secure_conn.send_message(f"Target '{target_name}' does not exist.")
+            return
+
+        if not self.perm_manager.has_permission(target, "read"):
+            self.secure_conn.send_message("Access denied: You do not have permission to share this item.")
+            return
+
+        recipient_home = self.root / recipient
+        if not recipient_home.exists():
+            self.secure_conn.send_message(f"User '{recipient}' does not exist.")
+            return
+
+        recipient_shared = recipient_home / "shared"
+        if not recipient_shared.exists():
+            try:
+                recipient_shared.mkdir(exist_ok=True)
+            except Exception as e:
+                self.secure_conn.send_message(f"Failed to create shared folder for {recipient}: {e}")
+                return
+
+  
+        symlink_name = f"{self.username}_{target.name}"
+        symlink_path = recipient_shared / symlink_name
+
+        if symlink_path.exists():
+            self.secure_conn.send_message(f"A shared item named '{symlink_name}' already exists for '{recipient}'.")
+            return
+
+        try:
+            symlink_path.symlink_to(target, target.is_dir())
+        except Exception as e:
+            self.secure_conn.send_message(f"Failed to create symlink: {e}")
+            return
+
+        if target.is_dir():
+            
+            perms_file = target / PERMISSIONS_FILE
+            if not perms_file.exists():
+                self.secure_conn.send_message("Permissions file not found in target directory.")
+                return
+            try:
+                with perms_file.open("r") as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.secure_conn.send_message(f"Failed to load permissions file: {e}")
+                return
+
+            data.setdefault("dir_permissions", {})[recipient] = perms
+            try:
+                with perms_file.open("w") as f:
+                    json.dump(data, f, indent=4)
+            except Exception as e:
+                self.secure_conn.send_message(f"Failed to update permissions file: {e}")
+                return
+
+            def update_subdirs(directory: Path):
+                for sub in directory.iterdir():
+                    if sub.is_dir():
+                        sub_perm = sub / PERMISSIONS_FILE
+                        if sub_perm.exists():
+                            try:
+                                with sub_perm.open("r") as f:
+                                    sub_data = json.load(f)
+                            except Exception:
+                                continue
+                            sub_data.setdefault("dir_permissions", {})[recipient] = perms
+                            with sub_perm.open("w") as f:
+                                json.dump(sub_data, f, indent=4)
+                        update_subdirs(sub)
+                    else:
+                        parent = sub.parent
+                        parent_perm = parent / PERMISSIONS_FILE
+                        if parent_perm.exists():
+                            try:
+                                with parent_perm.open("r") as f:
+                                    p_data = json.load(f)
+                            except Exception:
+                                continue
+                            if "files" in p_data and sub.name in p_data["files"]:
+                                p_data["files"][sub.name].setdefault("permissions", {})[recipient] = perms
+                                with parent_perm.open("w") as f:
+                                    json.dump(p_data, f, indent=4)
+            update_subdirs(target)
+        else:
+            parent = target.parent
+            perms_file = parent / PERMISSIONS_FILE
+            if not perms_file.exists():
+                self.secure_conn.send_message("Permissions file not found in parent directory.")
+                return
+            try:
+                with perms_file.open("r") as f:
+                    data = json.load(f)
+            except Exception as e:
+                self.secure_conn.send_message(f"Failed to load permissions file: {e}")
+                return
+            data.setdefault("files", {}).setdefault(target.name, {"permissions": {}})["permissions"][recipient] = perms
+            try:
+                with perms_file.open("w") as f:
+                    json.dump(data, f, indent=4)
+            except Exception as e:
+                self.secure_conn.send_message(f"Failed to update permissions file: {e}")
+                return
+
+        self.secure_conn.send_message(f"'{target.name}' has been shared with '{recipient}' as '{symlink_name}' with permissions {perms}.")
+
+        
