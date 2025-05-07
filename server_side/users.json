@@ -1,0 +1,17 @@
+{
+    "user1": {
+        "salt": "98ed1ebe40fef6938d461ac57e1d878c",
+        "password": "c7388d9fbee2e841007eb6be59993014b47ad783a8556fb38df0e3449ccf1789",
+        "home": "file_perm_root\\user1"
+    },
+    "user2": {
+        "salt": "a3c6e0c8692e3b378d5773bd76f93a83",
+        "password": "11c0a27e32ff36bf681e3dadeba29dfcbd61bcd4df61c80cb0d9b56adf45eab0",
+        "home": "file_perm_root\\user2"
+    },
+    "user3": {
+        "salt": "6471353da3075e28641d15f11626d1b0",
+        "password": "79f20cd81036729376871096ad20852f1f89b0d973ee6bb109ee2286fe4dc36d",
+        "home": "file_perm_root\\user3"
+    }
+}
